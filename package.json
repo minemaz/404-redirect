@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Client-side old-URL to new-URL redirector for post-renewal 404 pages.",
+  "license": "MIT",
+  "author": "Hiroki Minematsu",
   "scripts": {
     "build:sqlite": "node redirects/build-sqlite.js redirects/map.json redirects/map.sqlite",
     "fetch:sqljs": "cp node_modules/sql.js/dist/sql-wasm.js redirects/sql-wasm.js && cp node_modules/sql.js/dist/sql-wasm.wasm redirects/sql-wasm.wasm",

@@ -129,4 +129,4 @@ exact / prefix / regex すべての挙動を確認できる。
 
 ## ライセンス
 
-未定。利用前に必要に応じて追記すること。
+[MIT License](LICENSE) — Copyright (c) 2026 Hiroki Minematsu
