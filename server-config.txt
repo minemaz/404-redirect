@@ -57,6 +57,53 @@
   /redirects/map.sqlite           … build-sqlite.js の出力
 
 ==============================================================================
+ セキュリティヘッダ(多層防御)
+==============================================================================
+
+  クライアント側コードでも危険スキームとオープンリダイレクトはブロックして
+  いるが、ブラウザ側でも多層的に止めるために以下のヘッダを推奨。
+  404 レスポンスにも適用するため Apache では `Header always set ...` を使う。
+
+  --- JSON 版を使う場合(WASM 不要) ---
+  Content-Security-Policy:
+      default-src 'none';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      connect-src 'self';
+      img-src 'self' data:;
+      base-uri 'none';
+      form-action 'none';
+      frame-ancestors 'none'
+
+  --- SQLite/sql.js 版を使う場合(WASM が必要) ---
+  Content-Security-Policy:
+      default-src 'none';
+      script-src 'self' 'wasm-unsafe-eval';
+      style-src 'self' 'unsafe-inline';
+      connect-src 'self';
+      img-src 'self' data:;
+      base-uri 'none';
+      form-action 'none';
+      frame-ancestors 'none'
+
+  --- 共通で必ず付ける ---
+  X-Content-Type-Options: nosniff
+  Referrer-Policy:        strict-origin-when-cross-origin
+  X-Frame-Options:        DENY                   # frame-ancestors を見ない古い実装向け
+
+  Apache (404 にも付与):
+      Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      Header always set X-Content-Type-Options "nosniff"
+      Header always set Referrer-Policy        "strict-origin-when-cross-origin"
+      Header always set X-Frame-Options        "DENY"
+
+  Nginx:
+      add_header Content-Security-Policy "..." always;
+      add_header X-Content-Type-Options  "nosniff" always;
+      add_header Referrer-Policy         "strict-origin-when-cross-origin" always;
+      add_header X-Frame-Options         "DENY" always;
+
+==============================================================================
  JSON 版と SQLite 版の選び分け
 ==============================================================================
                           JSON 版              SQLite/sql.js 版

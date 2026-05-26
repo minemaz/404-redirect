@@ -29,6 +29,13 @@
   const PANEL  = document.getElementById('panel');
   const COUNTDOWN_SEC = 5;
 
+  // ---- セキュリティ設定 -------------------------------------------------
+  // 同一オリジンへの転送のみ既定で許可。詳細は redirects.js と同じ。
+  const CROSS_ORIGIN_ALLOWLIST = Object.freeze([
+    // 'https://en.example.com',
+  ]);
+  // ----------------------------------------------------------------------
+
   const origPath   = location.pathname;
   const origSearch = location.search;
   const origHash   = location.hash;
@@ -57,12 +64,27 @@
     const hit = lookup(db, origPath);
     if (hit) {
       const target = buildTarget(hit.to);
-      announceRedirect(target, hit.type);
+      if (target) {
+        announceRedirect(target, hit.type);
+      } else {
+        // 危険スキーム / 許可外オリジン → 転送せず案内のみ
+        console.warn('[404] resolved target rejected by safety policy:', hit);
+        setPanel('missing', '該当する移転先が見つかりませんでした。');
+      }
     } else {
       setPanel('missing', '該当する移転先が見つかりませんでした。');
     }
   } finally {
     db.close();
+  }
+
+  // ---------- safety ----------
+
+  // 詳細は redirects.js の同名関数のコメント参照。
+  function isSafeTarget(url) {
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    if (url.origin === location.origin) return true;
+    return CROSS_ORIGIN_ALLOWLIST.includes(url.origin);
   }
 
   // ---------- matching ----------
@@ -132,7 +154,13 @@
   }
 
   function buildTarget(toPath) {
-    const target = new URL(toPath, location.origin);
+    let target;
+    try {
+      target = new URL(toPath, location.origin);
+    } catch {
+      return null;
+    }
+    if (!isSafeTarget(target)) return null;
     if (!target.search && origSearch) target.search = origSearch;
     if (!target.hash   && origHash)   target.hash   = origHash;
     return target.href;

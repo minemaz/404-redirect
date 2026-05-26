@@ -32,6 +32,16 @@
   const MAP_URL  = '/redirects/map.json';
   const COUNTDOWN_SEC = 5;
 
+  // ---- セキュリティ設定 -------------------------------------------------
+  // 既定では同一オリジンへの転送のみ許可する。
+  // 別ドメインへ意図的に転送したい場合だけ、明示的にオリジンを追加すること。
+  // 例: 'https://en.example.com'
+  // (これによりオープンリダイレクトと javascript:/data:/file: 経由の XSS を防ぐ)
+  const CROSS_ORIGIN_ALLOWLIST = Object.freeze([
+    // 'https://en.example.com',
+  ]);
+  // ----------------------------------------------------------------------
+
   // 404 で返ったページの URL がそのまま「旧URL」になる
   const origPath   = location.pathname;
   const origSearch = location.search;
@@ -54,13 +64,38 @@
 
     if (hit) {
       const target = buildTarget(hit.to);
-      announceRedirect(target, hit.type);
-      logEvent('hit', { from: origPath, to: target, type: hit.type });
+      if (target) {
+        announceRedirect(target, hit.type);
+        logEvent('hit', { from: origPath, to: target, type: hit.type });
+      } else {
+        // 解決した転送先が安全ポリシーに反する(危険スキーム / 許可外オリジン)。
+        // 攻撃者が prefix/regex ルールを悪用して javascript: や別オリジン URL を
+        // 生成できないように、ここで完全に転送を止める。
+        console.warn('[404] resolved target rejected by safety policy:', hit);
+        announceNoMatch();
+        showSuggestions(origPath, map);
+        logEvent('miss', { from: origPath, reason: 'unsafe-target' });
+      }
     } else {
       announceNoMatch();
       showSuggestions(origPath, map);
       logEvent('miss', { from: origPath });
     }
+  }
+
+  // ---------- safety ----------
+
+  // 解決後の URL が転送先として安全かを判定する。
+  //   - http(s) 以外のスキーム(javascript:, data:, file:, blob:, vbscript:, ...)を全拒否
+  //   - 同一オリジン以外は CROSS_ORIGIN_ALLOWLIST に明示登録された場合のみ許可
+  // これにより:
+  //   * <a href="javascript:..."> 経由のリフレクトXSSをブロック
+  //   * '//evil.com/...' などプロトコル相対URLによるオープンリダイレクトをブロック
+  //   * 'https://evil.com/...' などの絶対URL経由のオープンリダイレクトをブロック
+  function isSafeTarget(url) {
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    if (url.origin === location.origin) return true;
+    return CROSS_ORIGIN_ALLOWLIST.includes(url.origin);
   }
 
   // ---------- matching ----------
@@ -103,7 +138,14 @@
 
   function buildTarget(toPath) {
     // 新URLが絶対URL(http://…)ならそのまま、相対なら location.origin に乗せる
-    const target = new URL(toPath, location.origin);
+    let target;
+    try {
+      target = new URL(toPath, location.origin);
+    } catch {
+      return null;  // パース失敗
+    }
+    // 安全性ポリシーで弾かれた場合は null を返し、上位で転送を中止する
+    if (!isSafeTarget(target)) return null;
     // クエリ・フラグメントは原則継承(新URLが既に持っている場合はそちら優先)
     if (!target.search && origSearch) target.search = origSearch;
     if (!target.hash   && origHash)   target.hash   = origHash;
@@ -111,6 +153,9 @@
   }
 
   // ---------- UI ----------
+  // テンプレート + esc() + isSafeTarget の URL 検証で安全性は確保している。
+  // target は buildTarget で http/https + 同一オリジン(または allowlist)と
+  // 検証済みなので、href 属性経由の javascript:/data: 等のXSSは発生しない。
 
   function announceRedirect(target, type) {
     let remain = COUNTDOWN_SEC;
@@ -157,15 +202,27 @@
     if (!map.exact) return;
     const cands = similar(path, Object.keys(map.exact), 5);
     if (!cands.length) return;
+
+    // 候補のリンク先も同じ安全ポリシーに通す。map.json が汚染されて
+    // javascript: URL 等が紛れ込んだ場合に、サジェスト経由のXSSも防ぐ。
+    const items = cands.map(([oldUrl]) => {
+      let safeUrl;
+      try {
+        const u = new URL(map.exact[oldUrl], location.origin);
+        if (!isSafeTarget(u)) return '';
+        safeUrl = u.href;
+      } catch {
+        return '';
+      }
+      return `<li>
+        <a href="${esc(safeUrl)}">${esc(safeUrl)}</a>
+        <br><small>旧: ${esc(oldUrl)}</small>
+       </li>`;
+    }).filter(Boolean).join('');
+
+    if (!items) return;
     SUGGEST.innerHTML =
-      '<h3>類似する旧URL:</h3><ul class="suggest">' +
-      cands.map(([oldUrl]) =>
-        `<li>
-          <a href="${esc(map.exact[oldUrl])}">${esc(map.exact[oldUrl])}</a>
-          <br><small>旧: ${esc(oldUrl)}</small>
-         </li>`
-      ).join('') +
-      '</ul>';
+      '<h3>類似する旧URL:</h3><ul class="suggest">' + items + '</ul>';
   }
 
   // パス階層を比較した素朴な類似度
