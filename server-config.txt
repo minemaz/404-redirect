@@ -91,6 +91,14 @@
   Referrer-Policy:        strict-origin-when-cross-origin
   X-Frame-Options:        DENY                   # frame-ancestors を見ない古い実装向け
 
+  --- 高トラフィック公開サイト向けに追加で推奨 ---
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+      ※ HTTPS 強制、map.json の中間者改ざんを防ぐ
+  Cross-Origin-Opener-Policy: same-origin
+      ※ window.opener 経由のリーク・タブナビング系を防ぐ
+  Cross-Origin-Resource-Policy: same-origin
+      ※ map.json / redirects.js を他オリジンから読み込ませない
+
   Apache (404 にも付与):
       Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
       Header always set X-Content-Type-Options "nosniff"

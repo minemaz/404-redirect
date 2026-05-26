@@ -123,17 +123,25 @@
     }
 
     // 3) 正規表現(SQLite 標準では REGEXP 関数未実装のため JS 側で評価)
-    const sRegex = db.prepare('SELECT pattern, repl FROM regex_map ORDER BY id');
-    try {
-      while (sRegex.step()) {
-        const row = sRegex.getAsObject();
-        const re  = new RegExp(row.pattern);
-        if (re.test(path)) {
-          return { to: path.replace(re, row.repl), type: 'regex' };
+    //    詳細は redirects.js の同じブロックを参照: 長 path で ReDoS を回避し、
+    //    不正な pattern は当該ルールだけスキップする。
+    if (path.length <= 2048) {
+      const sRegex = db.prepare('SELECT pattern, repl FROM regex_map ORDER BY id');
+      try {
+        while (sRegex.step()) {
+          const row = sRegex.getAsObject();
+          try {
+            const re = new RegExp(row.pattern);
+            if (re.test(path)) {
+              return { to: path.replace(re, row.repl), type: 'regex' };
+            }
+          } catch {
+            // 不正な正規表現はスキップ
+          }
         }
+      } finally {
+        sRegex.free();
       }
-    } finally {
-      sRegex.free();
     }
 
     return null;

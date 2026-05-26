@@ -124,11 +124,21 @@
     }
 
     // 3) 正規表現($1, $2 で参照)
-    if (Array.isArray(map.regex)) {
-      for (const [pattern, repl] of map.regex) {
-        const re = new RegExp(pattern);
-        if (re.test(path)) {
-          return { to: path.replace(re, repl), type: 'regex' };
+    //    - 異常に長い path は ReDoS のリスクがあるため評価対象から除外
+    //      (実運用の URL 長は通常 1024 以下、2048 は十分な余裕)
+    //    - pattern 不正な行は new RegExp が SyntaxError を投げるが、
+    //      その1行だけスキップして他のルールは継続評価する
+    //      (デプロイミスで 404 ハンドラ全体が無反応になるのを防ぐ)
+    if (Array.isArray(map.regex) && path.length <= 2048) {
+      for (const entry of map.regex) {
+        try {
+          const [pattern, repl] = entry;
+          const re = new RegExp(pattern);
+          if (re.test(path)) {
+            return { to: path.replace(re, repl), type: 'regex' };
+          }
+        } catch {
+          // 不正な正規表現はスキップ
         }
       }
     }
