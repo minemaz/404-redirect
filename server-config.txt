@@ -1,0 +1,68 @@
+==============================================================================
+ 404 リダイレクト  サーバ設定例
+==============================================================================
+
+【重要な前提】
+  ErrorDocument の方式が「内部サブリクエスト」になっていること。
+  外部 302 リダイレクトを返してしまうと、ブラウザのアドレスバーが
+  /404.html に書き換わってしまい、JS から旧 URL を取得できなくなる。
+
+------------------------------------------------------------------------------
+ Apache (.htaccess または httpd.conf)
+------------------------------------------------------------------------------
+  ErrorDocument 404 /404.html
+
+  # map.json/sqlite を gzip/Brotli 配信し、長めにキャッシュさせる
+  <FilesMatch "\.(json|sqlite|wasm)$">
+    Header set Cache-Control "public, max-age=3600"
+  </FilesMatch>
+  AddOutputFilterByType DEFLATE application/json application/wasm
+
+------------------------------------------------------------------------------
+ Nginx
+------------------------------------------------------------------------------
+  error_page 404 /404.html;
+  location = /404.html {
+      internal;
+      add_header Cache-Control "no-cache";
+  }
+  location /redirects/ {
+      gzip on;
+      gzip_types application/json application/wasm application/octet-stream;
+      add_header Cache-Control "public, max-age=3600";
+  }
+
+------------------------------------------------------------------------------
+ 静的ホスティング (Netlify / Vercel / Cloudflare Pages)
+------------------------------------------------------------------------------
+  Netlify (_redirects):
+      /*  /404.html  404
+      ※ 404.html を渡すと、デフォルトでオリジナル URL が保持される
+
+  Vercel (vercel.json):
+      { "routes": [
+          { "src": "/(.*)", "dest": "/404.html", "status": 404 }
+      ]}
+
+==============================================================================
+ ディレクトリ構成
+==============================================================================
+  /404.html                       … 404 表示ページ(本体)
+  /redirects/redirects.js         … JSON 版 lookup ロジック  ★まずこちら
+  /redirects/map.json             … 旧→新 マッピングデータ
+  /redirects/redirects-sqlite.js  … SQLite 版 lookup (オプション)
+  /redirects/build-sqlite.js      … map.json → map.sqlite 変換 (Node)
+  /redirects/sql-wasm.js          … sql.js (npm i sql.js から取得)
+  /redirects/sql-wasm.wasm        … 〃 (npm i sql.js から取得)
+  /redirects/map.sqlite           … build-sqlite.js の出力
+
+==============================================================================
+ JSON 版と SQLite 版の選び分け
+==============================================================================
+                          JSON 版              SQLite/sql.js 版
+  追加転送容量            数 KB〜数百 KB        WASM 250KB〜 + DB
+  初期化(WASM 読込)     不要                 数十 ms 〜数百 ms
+  数千件規模での lookup   < 1ms               < 1ms (同等)
+  数万件超 lookup         やや遅い (O(n) 検索) インデックス有利
+  デプロイ手順            map.json を置くだけ   ビルド工程が要る
+  推奨                    ★ 多くの場合これ      規模超大 or 複雑クエリ時

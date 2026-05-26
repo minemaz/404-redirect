@@ -1,0 +1,16 @@
+# Node
+node_modules/
+
+# Generated artifacts (build with `npm run build`)
+redirects/map.sqlite
+
+# Vendored sql.js distribution (fetched with `npm run fetch:sqljs`)
+redirects/sql-wasm.js
+redirects/sql-wasm.wasm
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

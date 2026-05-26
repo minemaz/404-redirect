@@ -1,0 +1,20 @@
+{
+  "exact": {
+    "/old/about.html":      "/about",
+    "/contact.php":         "/contact",
+    "/news/index.html":     "/news",
+    "/products/old.aspx":   "/products",
+    "/会社案内.html":         "/company"
+  },
+  "prefix": [
+    ["/blog/old/",     "/blog/"],
+    ["/sp/",           "/m/"],
+    ["/products/v1/",  "/products/"],
+    ["/docs/2024/",    "/docs/archive/2024/"]
+  ],
+  "regex": [
+    ["^/article/(\\d+)\\.html$",         "/posts/$1"],
+    ["^/category/([^/]+)/(\\d+)$",       "/c/$1/p/$2"],
+    ["^/users/([^/]+)/profile\\.html$",  "/u/$1"]
+  ]
+}
