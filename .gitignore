@@ -4,6 +4,10 @@ node_modules/
 # Generated artifacts (build with `npm run build`)
 redirects/map.sqlite
 
+# E2E test runtime: backup created by e2e/run-tests.py
+# (本来は test 終了時に自動復元されるが、強制終了時に残ることがある)
+redirects/map.json.e2e-backup
+
 # Vendored sql.js distribution (fetched with `npm run fetch:sqljs`)
 redirects/sql-wasm.js
 redirects/sql-wasm.wasm

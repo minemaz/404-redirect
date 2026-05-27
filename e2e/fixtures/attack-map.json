@@ -1,0 +1,19 @@
+{
+  "exact": {
+    "/direct-js":   "javascript:alert('XSS-A1')",
+    "/abs-cross":   "https://evil.example.com/phish",
+    "/data-uri":    "data:text/html,<script>alert(1)</script>",
+    "/file-leak":   "file:///etc/passwd",
+    "/q/foo":       "/safe",
+    "/q/evil":      "javascript:alert('XSS-SUG')"
+  },
+  "prefix": [
+    ["/r/", "/"],
+    ["/safe-old/", "/safe-new/"]
+  ],
+  "regex": [
+    ["^/redir/(.+)$",            "$1"],
+    ["[unclosed-bracket",        "/should-never-match"],
+    ["^/article/(\\d+)\\.html$", "/posts/$1"]
+  ]
+}
