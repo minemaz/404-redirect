@@ -37,16 +37,36 @@ CHROME_TIMEOUT = int(os.environ.get('CHROME_TIMEOUT', '45'))
 # ErrorDocument 相当の最小 HTTP サーバ
 # ---------------------------------------------------------------------------
 
+# redirects.js は転送先/サジェストを表示する前に HEAD で実在確認する。
+# 本ハーネスでは fixture の「正規の移転先」を実在(200)として応答させる
+# (これらは実ファイルではないため、明示しないと 404 になり検証が落ちる)。
+EXISTING_NEW = {
+    '/safe', '/safe/', '/safe-new/page.html', '/posts/1234',
+    '/safe-titled', '/safe-titled/', '/safe2', '/safe2/',
+}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     """未存在 URL でも 404 ステータスで 404.html の本文を返す。
-    本番の Apache `ErrorDocument 404 /404.html` 相当。"""
+    本番の Apache `ErrorDocument 404 /404.html` 相当。
+    ただし EXISTING_NEW は移転先の実在を模して 200 を返す。"""
     def __init__(self, *a, **k):
         super().__init__(*a, directory=PROJECT_ROOT, **k)
 
-    def do_GET(self):
-        translated = self.translate_path(self.path.split('?', 1)[0])
+    def _dispatch(self, head):
+        path = self.path.split('?', 1)[0]
+        translated = self.translate_path(path)
         if os.path.isfile(translated):
-            return super().do_GET()
+            return super().do_HEAD() if head else super().do_GET()
+        if path in EXISTING_NEW:
+            body = b'<!doctype html><title>ok</title>'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            if not head:
+                self.wfile.write(body)
+            return
         with open(os.path.join(PROJECT_ROOT, '404.html'), 'rb') as f:
             body = f.read()
         self.send_response(404)
@@ -54,7 +74,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
-        self.wfile.write(body)
+        if not head:
+            self.wfile.write(body)
+
+    def do_GET(self):
+        self._dispatch(head=False)
+
+    def do_HEAD(self):
+        self._dispatch(head=True)
 
     def log_message(self, *_):
         pass  # サーバログは抑制
@@ -76,7 +103,7 @@ def dump_dom(url):
     r = subprocess.run([
         CHROME, '--headless', '--disable-gpu', '--no-sandbox',
         f'--user-data-dir={USER_DATA}',
-        '--virtual-time-budget=2500',
+        '--virtual-time-budget=5000',
         '--dump-dom', url,
     ], capture_output=True, text=True, timeout=CHROME_TIMEOUT)
     if r.returncode != 0:
@@ -118,6 +145,7 @@ def parse(html):
     return dict(
         panelClass=panel_class,
         links=links,
+        body=panel_body + sugg_body,
         scriptInj=bool(SCRIPT_INJ_RE.search(html)),
         eventInj=bool(EVENT_INJ_RE.search(html)),
     )
@@ -126,7 +154,8 @@ def parse(html):
 # ---------------------------------------------------------------------------
 # シナリオ定義
 #   (name, attack-path, expected panel.class, list of substrings that must
-#    appear in dynamic links — empty list means "no dyn links at all")
+#    appear in dynamic links — empty list means "no dyn links at all"
+#    [, list of substrings that must appear in panel/suggestions body text])
 # ---------------------------------------------------------------------------
 
 SCENARIOS = [
@@ -136,14 +165,21 @@ SCENARIOS = [
     ('A4  file: スキーム',                    '/file-leak',                       'missing', []),
     ('A5  絶対クロスオリジン',                '/abs-cross',                       'missing', []),
     ('A6  プロトコル相対',                    '/r//evil.com/phish',               'missing', []),
-    ('OK1 regex 正常転送',                    '/article/1234.html',               'found',   ['/posts/1234']),
+    ('OK1 regex 正常転送',                    '/article/1234.html',               'found',   ['/posts/1234'],
+     ['記事']),
     ('OK2 prefix 正常転送',                   '/safe-old/page.html',              'found',   ['/safe-new/page.html']),
     ('OK3 exact 正常転送',                    '/q/foo',                           'found',   ['/safe']),
+    ('OK4 exact object形式 + title 表示',     '/q/titled',                        'found',   ['/safe-titled'],
+     ['移転先タイトル']),
+    ('T1  title 内 HTML はエスケープされる',  '/q/eviltitle',                     'found',   ['/safe2'],
+     ['&lt;script&gt;']),
     ('SUG サジェスト欄が javascript: を除外', '/q/unknown',                       'missing', ['/safe']),
+    ('DEAD 転送先が404なら転送も案内もしない', '/deadzone/page',                  'missing', []),
+    ('ORP 未マッチ&同一区分なしは案内しない',  '/zzz-orphan-section/foo',         'missing', []),
 ]
 
 
-def assert_scenario(observed, want_class, want_link_subs):
+def assert_scenario(observed, want_class, want_link_subs, want_text_subs=()):
     issues = []
     if observed['panelClass'] != want_class:
         issues.append(
@@ -152,6 +188,10 @@ def assert_scenario(observed, want_class, want_link_subs):
     for sub in want_link_subs:
         if not any(sub in l for l in observed['links']):
             issues.append(f'expected link containing {sub!r}, got {observed["links"]}')
+
+    for sub in want_text_subs:
+        if sub not in observed['body']:
+            issues.append(f'expected body text containing {sub!r}')
 
     if want_class == 'missing' and not want_link_subs and observed['links']:
         issues.append(f'expected no dyn links, got {observed["links"]}')
@@ -211,11 +251,12 @@ def main():
 
     passed = failed = 0
     try:
-        for name, path, want_class, want_links in SCENARIOS:
+        for name, path, want_class, want_links, *rest in SCENARIOS:
+            want_texts = rest[0] if rest else ()
             url = f'http://127.0.0.1:{port}{path}'
             html = dump_dom(url)
             obs  = parse(html)
-            issues = assert_scenario(obs, want_class, want_links)
+            issues = assert_scenario(obs, want_class, want_links, want_texts)
             if issues:
                 print(f'FAIL  {name}')
                 for i in issues:

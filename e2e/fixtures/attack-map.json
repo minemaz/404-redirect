@@ -5,7 +5,10 @@
     "/data-uri":    "data:text/html,<script>alert(1)</script>",
     "/file-leak":   "file:///etc/passwd",
     "/q/foo":       "/safe",
-    "/q/evil":      "javascript:alert('XSS-SUG')"
+    "/q/evil":      "javascript:alert('XSS-SUG')",
+    "/q/titled":    { "to": "/safe-titled", "title": "移転先タイトル" },
+    "/q/eviltitle": { "to": "/safe2", "title": "<script>alert('XSS-TITLE')</script>悪性title" },
+    "/deadzone/page": "/nonexistent-xyz"
   },
   "prefix": [
     ["/r/", "/"],
@@ -14,6 +17,6 @@
   "regex": [
     ["^/redir/(.+)$",            "$1"],
     ["[unclosed-bracket",        "/should-never-match"],
-    ["^/article/(\\d+)\\.html$", "/posts/$1"]
+    ["^/article/(\\d+)\\.html$", "/posts/$1", "記事"]
   ]
 }

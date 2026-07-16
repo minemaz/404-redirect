@@ -12,6 +12,9 @@ redirects/map.json.e2e-backup
 redirects/sql-wasm.js
 redirects/sql-wasm.wasm
 
+# Python bytecode
+__pycache__/
+
 # Editor / OS
 .DS_Store
 Thumbs.db

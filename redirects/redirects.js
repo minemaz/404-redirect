@@ -4,17 +4,21 @@
  * map.json の形式:
  *   {
  *     "exact": {                                  // 完全一致
- *       "/old/about.html": "/about",
- *       "/contact.php":    "/contact"
+ *       "/old/about.html": "/about",              // 値は文字列、または
+ *       "/contact.php":    { "to": "/contact",    // { to, title } オブジェクト
+ *                            "title": "お問い合わせ" }
  *     },
  *     "prefix": [                                 // 前方一致(長い順に列挙する)
- *       ["/blog/old/",      "/blog/"],            // 残りパスは引き継ぐ
- *       ["/products/v1/",   "/products/"]
+ *       ["/blog/old/",      "/blog/", "ブログ"],   // 残りパスは引き継ぐ。第3要素は
+ *       ["/products/v1/",   "/products/"]         // 省略可能な title
  *     ],
  *     "regex": [                                  // 正規表現(順番に評価)
- *       ["^/article/(\\d+)\\.html$", "/posts/$1"]
+ *       ["^/article/(\\d+)\\.html$", "/posts/$1", "記事"]  // 第3要素は省略可能な title
  *     ]
  *   }
+ *
+ * title は転送案内・サジェスト候補に説明文として表示される(省略可)。
+ * プレーンテキスト扱いで、表示時に HTML エスケープされる。
  *
  * 配信サーバ側のヒント:
  *   - map.json は Content-Encoding: gzip (もしくは Brotli) で配信。
@@ -65,8 +69,21 @@
     if (hit) {
       const target = buildTarget(hit.to);
       if (target) {
-        announceRedirect(target, hit.type);
-        logEvent('hit', { from: origPath, to: target, type: hit.type });
+        // 転送先が新サイトに実在するか表示直前に確認する。
+        // 明確に存在しない(404/410)ときは転送せず、案内も出さない。
+        // ネットワーク不明時は map が事前検証済みである前提で転送する。
+        STATUS.textContent = `転送先を確認中…`;
+        checkAlive(target).then(alive => {
+          if (alive === false) {
+            console.warn('[404] resolved target no longer exists:', target);
+            announceNoMatch();
+            showSuggestions(origPath, map);
+            logEvent('miss', { from: origPath, reason: 'target-gone', to: target });
+          } else {
+            announceRedirect(target, hit.type, hit.title);
+            logEvent('hit', { from: origPath, to: target, type: hit.type });
+          }
+        });
       } else {
         // 解決した転送先が安全ポリシーに反する(危険スキーム / 許可外オリジン)。
         // 攻撃者が prefix/regex ルールを悪用して javascript: や別オリジン URL を
@@ -81,6 +98,27 @@
       showSuggestions(origPath, map);
       logEvent('miss', { from: origPath });
     }
+  }
+
+  // 実在確認: HEAD で 200番台なら true、404/410 なら false、
+  // それ以外(ネットワークエラー/タイムアウト/曖昧なステータス)は null(不明)。
+  // 「存在しないURLは案内しない」を表示時点で担保するための最終ゲート。
+  function checkAlive(url) {
+    return new Promise(resolve => {
+      let settled = false;
+      const done = v => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+      const ctl = ('AbortController' in window) ? new AbortController() : null;
+      const timer = setTimeout(() => { if (ctl) try { ctl.abort(); } catch {} ; done(null); }, 3500);
+      fetch(url, { method: 'HEAD', redirect: 'manual',
+                   signal: ctl ? ctl.signal : undefined })
+        .then(r => {
+          // opaqueredirect(3xx)は実在扱い。200番台=実在。404/410=不在。
+          if (r.type === 'opaqueredirect' || r.ok) return done(true);
+          if (r.status === 404 || r.status === 410) return done(false);
+          done(null);
+        })
+        .catch(() => done(null));
+    });
   }
 
   // ---------- safety ----------
@@ -100,6 +138,17 @@
 
   // ---------- matching ----------
 
+  // exact の値・prefix/regex の転送先には2形式を許す:
+  //   文字列                      → 転送先のみ
+  //   { to, title } / 第3要素付き → 転送先 + 説明文(title)
+  function entryTo(v) {
+    return typeof v === 'string' ? v : (v && v.to);
+  }
+  function entryTitle(v) {
+    if (typeof v === 'string') return null;
+    return (v && typeof v.title === 'string' && v.title) || null;
+  }
+
   function resolve(path, map) {
     // 1) 完全一致(末尾スラッシュの有無を吸収)
     const variants = path.endsWith('/')
@@ -109,16 +158,21 @@
     if (map.exact) {
       for (const v of variants) {
         if (Object.hasOwn(map.exact, v)) {
-          return { to: map.exact[v], type: 'exact' };
+          const val = map.exact[v];
+          return { to: entryTo(val), type: 'exact', title: entryTitle(val) };
         }
       }
     }
 
     // 2) 前方一致(残りパスを継承)。長い順に並べておくこと
     if (Array.isArray(map.prefix)) {
-      for (const [from, to] of map.prefix) {
+      for (const [from, to, title] of map.prefix) {
         if (path.startsWith(from)) {
-          return { to: to + path.slice(from.length), type: 'prefix' };
+          return {
+            to: to + path.slice(from.length),
+            type: 'prefix',
+            title: title || null
+          };
         }
       }
     }
@@ -132,10 +186,10 @@
     if (Array.isArray(map.regex) && path.length <= 2048) {
       for (const entry of map.regex) {
         try {
-          const [pattern, repl] = entry;
+          const [pattern, repl, title] = entry;
           const re = new RegExp(pattern);
           if (re.test(path)) {
-            return { to: path.replace(re, repl), type: 'regex' };
+            return { to: path.replace(re, repl), type: 'regex', title: title || null };
           }
         } catch {
           // 不正な正規表現はスキップ
@@ -147,6 +201,8 @@
   }
 
   function buildTarget(toPath) {
+    // object 形式の "to" 欠落など、転送先が文字列でない場合は不成立扱い
+    if (typeof toPath !== 'string' || !toPath) return null;
     // 新URLが絶対URL(http://…)ならそのまま、相対なら location.origin に乗せる
     let target;
     try {
@@ -167,12 +223,17 @@
   // target は buildTarget で http/https + 同一オリジン(または allowlist)と
   // 検証済みなので、href 属性経由の javascript:/data: 等のXSSは発生しない。
 
-  function announceRedirect(target, type) {
+  // title はプレーンテキストとして esc() を通す(HTML は書けない)
+  function titleHtml(title) {
+    return title ? `<span class="entry-title">${esc(title)}</span><br>` : '';
+  }
+
+  function announceRedirect(target, type, title) {
     let remain = COUNTDOWN_SEC;
     PANEL.className = 'panel found';
     PANEL.innerHTML = `
       <p>ページは下記に移転しました <small>(${type} match)</small>:</p>
-      <p class="target"><a href="${esc(target)}">${esc(target)}</a></p>
+      <p class="target">${titleHtml(title)}<a href="${esc(target)}">${esc(target)}</a></p>
       <p>
         <span class="countdown" id="cd">${remain}</span> 秒後に自動で移動します。
         <button type="button" id="cancel">キャンセル</button>
@@ -208,52 +269,66 @@
     `;
   }
 
+  const MAX_SUGGEST = 5;
+
   function showSuggestions(path, map) {
     if (!map.exact) return;
-    const cands = similar(path, Object.keys(map.exact), 5);
+    const cands = similar(path, Object.keys(map.exact), MAX_SUGGEST);
     if (!cands.length) return;
 
-    // 候補のリンク先も同じ安全ポリシーに通す。map.json が汚染されて
-    // javascript: URL 等が紛れ込んだ場合に、サジェスト経由のXSSも防ぐ。
-    const items = cands.map(([oldUrl]) => {
+    // 各候補について: 安全ポリシー(javascript:/別オリジン排除)+ 実在(HEAD)を検証し、
+    // 「新サイトに現存し、かつ安全」なものだけを最大 MAX_SUGGEST 件表示する。
+    // これにより存在しないURL・無関係URLをユーザに提示しない。
+    const seen = new Set();
+    const checks = cands.map(([oldUrl]) => {
+      const val = map.exact[oldUrl];
+      const to  = entryTo(val);
+      if (typeof to !== 'string' || !to) return Promise.resolve(null);
       let safeUrl;
       try {
-        const u = new URL(map.exact[oldUrl], location.origin);
-        if (!isSafeTarget(u)) return '';
+        const u = new URL(to, location.origin);
+        if (!isSafeTarget(u)) return Promise.resolve(null);
         safeUrl = u.href;
       } catch {
-        return '';
+        return Promise.resolve(null);
       }
-      return `<li>
-        <a href="${esc(safeUrl)}">${esc(safeUrl)}</a>
-        <br><small>旧: ${esc(oldUrl)}</small>
-       </li>`;
-    }).filter(Boolean).join('');
+      if (seen.has(safeUrl)) return Promise.resolve(null);
+      seen.add(safeUrl);
+      return checkAlive(safeUrl).then(alive =>
+        alive === true ? { oldUrl, safeUrl, title: entryTitle(val) } : null);
+    });
 
-    if (!items) return;
-    SUGGEST.innerHTML =
-      '<h3>類似する旧URL:</h3><ul class="suggest">' + items + '</ul>';
+    Promise.all(checks).then(list => {
+      const items = list.filter(Boolean).slice(0, MAX_SUGGEST).map(it =>
+        `<li>
+        ${titleHtml(it.title)}<a href="${esc(it.safeUrl)}">${esc(it.safeUrl)}</a>
+        <br><small>旧: ${esc(it.oldUrl)}</small>
+       </li>`).join('');
+      if (!items) return;
+      SUGGEST.innerHTML =
+        '<h3>関連しそうなページ:</h3><ul class="suggest">' + items + '</ul>';
+    });
   }
 
-  // パス階層を比較した素朴な類似度
+  // 先頭パス階層(=上位区分)の一致数で類似度を測る。
+  // 末尾の部分文字列一致は無関係ページ(例: /tiji/ に対して "...itijikin" 等)を
+  // 誘発するため用いない。先頭セグメントを1つも共有しない候補は出さない。
+  // 実在確認(HEAD)は showSuggestions 側で行うので、ここは多めに返す。
   function similar(target, keys, k) {
     const tParts = target.split('/').filter(Boolean);
-    const tTail  = tParts.at(-1) || '';
+    if (!tParts.length) return [];
     return keys.map(key => {
       const parts = key.split('/').filter(Boolean);
-      let score = 0;
+      let lead = 0;
       for (let i = 0; i < Math.min(parts.length, tParts.length); i++) {
-        if (parts[i] === tParts[i]) score += 1;
+        if (parts[i] === tParts[i]) lead += 1;
         else break;
       }
-      const ktail = parts.at(-1) || '';
-      if (tTail && ktail === tTail) score += 0.7;
-      else if (tTail && ktail && ktail.includes(tTail)) score += 0.3;
-      return [key, score];
+      return [key, lead];
     })
-    .filter(([, s]) => s > 0)
+    .filter(([, lead]) => lead >= 1)   // 上位区分(先頭セグメント)を最低1つ共有すること
     .sort((a, b) => b[1] - a[1])
-    .slice(0, k);
+    .slice(0, k * 4);                  // HEAD検証で落ちる分を見込んで多めに取る
   }
 
   // ---------- util ----------

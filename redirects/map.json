@@ -1,19 +1,19 @@
 {
   "exact": {
-    "/old/about.html":      "/about",
-    "/contact.php":         "/contact",
+    "/old/about.html":      { "to": "/about", "title": "会社概要" },
+    "/contact.php":         { "to": "/contact", "title": "お問い合わせ" },
     "/news/index.html":     "/news",
     "/products/old.aspx":   "/products",
     "/会社案内.html":         "/company"
   },
   "prefix": [
-    ["/blog/old/",     "/blog/"],
+    ["/blog/old/",     "/blog/", "ブログ"],
     ["/sp/",           "/m/"],
     ["/products/v1/",  "/products/"],
-    ["/docs/2024/",    "/docs/archive/2024/"]
+    ["/docs/2024/",    "/docs/archive/2024/", "ドキュメント アーカイブ (2024)"]
   ],
   "regex": [
-    ["^/article/(\\d+)\\.html$",         "/posts/$1"],
+    ["^/article/(\\d+)\\.html$",         "/posts/$1", "記事"],
     ["^/category/([^/]+)/(\\d+)$",       "/c/$1/p/$2"],
     ["^/users/([^/]+)/profile\\.html$",  "/u/$1"]
   ]
